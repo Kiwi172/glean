@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glean"
+version = "1.0.0"
+description = "Drag a box round some text on screen and get the text"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["ocr", "screenshot", "tesseract", "gtk", "linux", "clipboard"]
+classifiers = [
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Graphics :: Capture :: Screen Capture",
+    "Topic :: Utilities",
+]
+# Deliberately empty. glean needs PyGObject and tesseract, and both are system
+# packages on every desktop it targets -- installing either from PyPI gets you
+# a broken build against the wrong GTK. `glean doctor` reports what is missing.
+dependencies = []
+
+[project.scripts]
+glean = "glean.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["glean*"]
