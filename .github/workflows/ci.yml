@@ -1,0 +1,119 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    # Runs the suite under a real X server, so the capture path -- reading the
+    # root window, cropping it, feeding it to tesseract -- is genuinely
+    # exercised rather than mocked. .github/e2e_capture.py is the part that
+    # needs the display.
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-22.04, name: "ubuntu 22.04 (python 3.10)" }
+          - { runner: ubuntu-24.04, name: "ubuntu 24.04 (python 3.12)" }
+    steps:
+      - uses: actions/checkout@v4
+
+      # Deliberately no actions/setup-python. PyGObject comes from apt, and an
+      # interpreter installed next to the system one cannot see
+      # /usr/lib/python3/dist-packages -- so a matrix over setup-python
+      # versions would test an import error. Running each image's own python3
+      # covers 3.10 and 3.12 in the only arrangement glean is installable in,
+      # which is also the arrangement its users will have.
+      - name: Install GTK, tesseract and an X server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb x11-utils \
+            python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-3.0 \
+            tesseract-ocr fonts-dejavu-core
+
+      - name: Versions under test
+        run: |
+          python3 --version
+          tesseract --version | head -1
+          python3 -c 'import gi; gi.require_version("Gtk","3.0"); \
+            from gi.repository import Gtk; \
+            print("gtk %d.%d.%d" % (Gtk.get_major_version(), \
+            Gtk.get_minor_version(), Gtk.get_micro_version()))'
+
+      - name: Start Xvfb
+        # One server shared by every step, rather than wrapping each command in
+        # xvfb-run, so there is no shell quoting to get wrong.
+        run: |
+          # Redirect its output: a background process holding the step's stdout
+          # open can stop the step from ever completing.
+          nohup Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp \
+            > /tmp/xvfb.log 2>&1 &
+          for _ in $(seq 1 50); do
+            xdpyinfo -display :99 >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          xdpyinfo -display :99 >/dev/null || { echo "Xvfb never came up"; exit 1; }
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      - name: Check glean can reach the display
+        # doctor exits non-zero when no screenshot backend works, so this
+        # gates on the capture path being usable at all.
+        run: python3 -m glean doctor
+
+      - name: Check nothing crept in from PyPI
+        run: python3 .github/no_dependencies.py
+
+      - name: Run the test suite
+        run: python3 -m unittest discover -s tests -t . -v
+
+      - name: Confirm the OCR tests ran rather than skipping
+        # They skip themselves when tesseract is missing, and a skipped test
+        # still reports OK -- which would quietly hollow out this whole job.
+        run: |
+          python3 -m unittest tests.test_glean.EndToEnd -v 2>&1 | tee out.txt
+          grep -q "Ran 6 tests" out.txt
+          if grep -qi "skipped" out.txt; then
+            echo "::error::the OCR tests skipped; tesseract was not usable"
+            exit 1
+          fi
+
+      - name: Read text off the actual screen
+        run: python3 .github/e2e_capture.py
+
+      - name: Xvfb log
+        if: failure()
+        run: cat /tmp/xvfb.log || true
+
+  package:
+    name: packaging
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-3.0
+      - name: Build the wheel and sdist
+        run: |
+          python3 -m pip install --upgrade pip build
+          python3 -m build
+      - name: Install the wheel and run the console script
+        # --system-site-packages is what makes the system PyGObject visible to
+        # the venv; without it the console script cannot import gi.
+        run: |
+          python3 -m venv --system-site-packages /tmp/venv
+          /tmp/venv/bin/pip install dist/*.whl
+          /tmp/venv/bin/glean --help
+          /tmp/venv/bin/glean --version
+          # No display in this job, so doctor reports everything unavailable
+          # and exits 1. It must do that rather than crash.
+          /tmp/venv/bin/glean doctor || true

@@ -1,5 +1,7 @@
 # glean
 
+[![tests](https://github.com/Kiwi172/glean/actions/workflows/ci.yml/badge.svg)](https://github.com/Kiwi172/glean/actions/workflows/ci.yml)
+
 **Drag a box round some text on the screen and it is on your clipboard.**
 
 Text on a screen is often not text: it is in a screenshot someone pasted into
@@ -210,6 +212,12 @@ python3 -m unittest discover -s tests -t .
 41 tests, no display needed. The OCR ones render text with cairo and read it
 back, so they check the real pipeline rather than a mock of it; they skip
 themselves if tesseract is not installed.
+
+CI runs them on Ubuntu 22.04 and 24.04 under Xvfb, against each image's system
+Python and system PyGObject — the arrangement glean is actually installable in.
+It also checks that nothing has crept in from PyPI, that the OCR tests did not
+quietly skip, and that `.github/e2e_capture.py` can put a phrase on the screen,
+screenshot it, and read it back.
 
 ---
 
