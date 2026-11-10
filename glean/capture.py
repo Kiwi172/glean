@@ -91,6 +91,17 @@ class GnomeShell(Backend):
     def grab(self):
         fd, path = tempfile.mkstemp(prefix="glean-", suffix=".png")
         os.close(fd)
+        # GNOME 46+ only serves this API to an allowlist of well-known bus
+        # names (see js/ui/screenshot.js: DBusSenderChecker). Borrow the
+        # screenshot app's name for the duration of the call.
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        try:
+            bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                          "org.freedesktop.DBus", "RequestName",
+                          GLib.Variant("(su)", ("org.gnome.Screenshot", 1)),
+                          None, Gio.DBusCallFlags.NONE, -1, None)
+        except GLib.Error:
+            pass
         try:
             proxy = Gio.DBusProxy.new_for_bus_sync(
                 Gio.BusType.SESSION, Gio.DBusProxyFlags.NONE, None,
@@ -106,6 +117,13 @@ class GnomeShell(Backend):
             raise CaptureError(exc.message)
         finally:
             _unlink(path)
+            try:
+                bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                              "org.freedesktop.DBus", "ReleaseName",
+                              GLib.Variant("(s)", ("org.gnome.Screenshot",)),
+                              None, Gio.DBusCallFlags.NONE, -1, None)
+            except GLib.Error:
+                pass
 
 
 class Portal(Backend):
