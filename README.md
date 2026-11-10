@@ -33,7 +33,8 @@ all — the only process glean starts other than itself is `tesseract`.
 
 ## Install
 
-**Ubuntu 22.04 or newer**, or any distribution with GTK 3 and Python 3.8+.
+**Ubuntu 22.04 or newer** — tested on the 22.04, 24.04 and 26.04 LTS releases —
+or any distribution with GTK 3 and Python 3.8+.
 Two system packages, both in the archive:
 
 ```bash
@@ -186,10 +187,11 @@ handles anything sensitive, so the durable history is off. Switch it on with
 **Wayland is worse, and not by glean's choice.** A Wayland client cannot read
 the screen; it has to ask the compositor. glean tries GNOME's own screenshot
 interface and then the xdg-desktop-portal, which may show a permission dialog
-each time depending on your version. The selection overlay also covers only
-one monitor there, because Wayland does not let a window place itself. On X11
-everything works with no prompt and no flash: the root window is read
-directly, in about 50ms.
+each time depending on your version. (On GNOME 50 — Ubuntu 26.04 — the shell
+interface is restricted to allowlisted callers, so the portal is the path that
+works.) The selection overlay covers the focused monitor, because Wayland does
+not let a window place itself. On X11 everything works with no prompt and no
+flash: the root window is read directly, in about 50ms.
 
 **It reads what is rendered.** Text under a translucent panel, mid-animation,
 or scaled down to 8px reads badly because it looks bad. Zoom the source in
@@ -213,8 +215,9 @@ python3 -m unittest discover -s tests -t .
 back, so they check the real pipeline rather than a mock of it; they skip
 themselves if tesseract is not installed.
 
-CI runs them on Ubuntu 22.04 and 24.04 under Xvfb, against each image's system
-Python and system PyGObject — the arrangement glean is actually installable in.
+CI runs them on Ubuntu 22.04, 24.04 and 26.04 under Xvfb, against each image's
+system Python and system PyGObject — the arrangement glean is actually
+installable in.
 It also checks that nothing has crept in from PyPI, that the OCR tests did not
 quietly skip, and that `.github/e2e_capture.py` can put a phrase on the screen,
 screenshot it, and read it back.

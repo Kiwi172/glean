@@ -21,6 +21,7 @@ jobs:
         include:
           - { runner: ubuntu-22.04, name: "ubuntu 22.04 (python 3.10)" }
           - { runner: ubuntu-24.04, name: "ubuntu 24.04 (python 3.12)" }
+          - { runner: ubuntu-26.04, name: "ubuntu 26.04 (python 3.14)" }
     steps:
       - uses: actions/checkout@v4
 
