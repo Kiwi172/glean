@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from glean import capture, config, ocr, store  # noqa: E402
 from glean.gi3 import GdkPixbuf, GLib  # noqa: E402
-from glean.overlay import clamp, normalise  # noqa: E402
+from glean.overlay import clamp, intersect, normalise, to_local  # noqa: E402
 
 
 def solid(width, height, level):
@@ -42,6 +42,28 @@ class Geometry(unittest.TestCase):
     def test_clamp_rejects_a_rect_that_is_entirely_off_screen(self):
         self.assertIsNone(clamp((2000, 50, 10, 10), 1920, 1080))
         self.assertIsNone(clamp((0, 0, 0, 50), 1920, 1080))
+
+    def test_intersect_overlaps_two_rects(self):
+        self.assertEqual(intersect((0, 0, 100, 100), (50, 50, 100, 100)),
+                         (50, 50, 50, 50))
+        self.assertEqual(intersect((10, 10, 50, 50), (0, 0, 1920, 1080)),
+                         (10, 10, 50, 50))
+
+    def test_intersect_of_disjoint_rects_is_none(self):
+        self.assertIsNone(intersect((0, 0, 10, 10), (20, 20, 10, 10)))
+        self.assertIsNone(intersect((0, 0, 10, 10), (10, 0, 10, 10)))  # touching
+
+    def test_to_local_maps_a_global_rect_into_a_monitor_view(self):
+        # Second monitor at +1920, no scaling: the global rect rebases to 0.
+        self.assertEqual(to_local((1920, 100, 400, 300), 1920, 0, 1.0, 1.0),
+                         (0, 100, 400, 300))
+        # 2x HiDPI: logical coordinates scale up into device pixels.
+        self.assertEqual(to_local((100, 50, 200, 100), 0, 0, 2.0, 2.0),
+                         (200, 100, 400, 200))
+
+    def test_a_preselect_off_the_view_clamps_away_to_nothing(self):
+        local = to_local((3000, 0, 400, 300), 0, 0, 1.0, 1.0)
+        self.assertIsNone(clamp(local, 1920, 1080))
 
 
 class Thresholding(unittest.TestCase):
@@ -208,6 +230,25 @@ class Store(unittest.TestCase):
         store.prune(directory, keep=3)
         left = sorted(f for f in os.listdir(directory) if f.endswith(".png"))
         self.assertEqual(left, ["20200107.png", "20200108.png", "20200109.png"])
+
+    def test_state_round_trips_and_merges(self):
+        store.save_state(last_rect=[10, 20, 30, 40])
+        store.save_state(window={"w": 800, "h": 600, "split": 250})
+        state = store.load_state()
+        self.assertEqual(state["last_rect"], [10, 20, 30, 40])
+        self.assertEqual(state["window"]["split"], 250)
+
+    def test_state_is_not_readable_by_other_users(self):
+        store.save_state(last_rect=[0, 0, 1, 1])
+        self.assertEqual(os.stat(store.state_path()).st_mode & 0o077, 0)
+
+    def test_no_state_yet_reads_as_empty(self):
+        self.assertEqual(store.load_state(), {})
+
+    def test_a_corrupt_state_file_reads_as_empty(self):
+        with open(store.state_path(), "w") as fh:
+            fh.write("this is not json")
+        self.assertEqual(store.load_state(), {})
 
 
 class Config(unittest.TestCase):

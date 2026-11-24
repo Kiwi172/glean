@@ -40,6 +40,9 @@ class ResultWindow(Gtk.Window):
         self._preview_width = 0
 
         self.set_default_size(860, 620)
+        self._split = None
+        if opts.get("remember", True):
+            self._restore_geometry(store.load_state())
         self.set_position(Gtk.WindowPosition.CENTER)
         self.set_icon_name("accessories-character-map")
         _install_css()
@@ -51,7 +54,33 @@ class ResultWindow(Gtk.Window):
         outer.pack_start(self._footer(), False, False, 0)
 
         self.connect("key-press-event", self._on_key)
-        self.connect("destroy", lambda *_: Gtk.main_quit())
+        self.connect("destroy", self._on_destroy)
+
+    def _restore_geometry(self, state):
+        """Reopen at the size, and with the image/text split, the window
+        last had — trimmed to what fits on the screens there now."""
+        saved = state.get("window")
+        if not isinstance(saved, dict):
+            return
+        try:
+            w, h, split = int(saved["w"]), int(saved["h"]), int(saved["split"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if w < 300 or h < 200:
+            return
+        w, h = _fit_to_display(w, h)
+        self.set_default_size(w, h)
+        self._split = min(max(split, 60), h - 140)
+
+    def _on_destroy(self, *_):
+        if self.opts.get("remember", True):
+            try:
+                w, h = self.get_size()
+                store.save_state(window={"w": w, "h": h,
+                                         "split": self.paned.get_position()})
+            except Exception:
+                pass
+        Gtk.main_quit()
 
     # ------------------------------------------------------------- widgets
     def _toolbar(self):
@@ -101,7 +130,8 @@ class ResultWindow(Gtk.Window):
 
     def _body(self):
         paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
-        paned.set_position(190)
+        paned.set_position(self._split if self._split else 190)
+        self.paned = paned
 
         shot = Gtk.ScrolledWindow()
         shot.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -283,6 +313,18 @@ class ResultWindow(Gtk.Window):
             self._copy()
             return True
         return False
+
+
+def _fit_to_display(w, h):
+    """Clamp a remembered window size to the biggest screen there is now."""
+    display = Gdk.Display.get_default()
+    monitor = None
+    if display is not None:
+        monitor = display.get_primary_monitor() or display.get_monitor(0)
+    if monitor is None:
+        return w, h
+    g = monitor.get_geometry()
+    return max(300, min(w, g.width - 60)), max(200, min(h, g.height - 60))
 
 
 def _install_css():

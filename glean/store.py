@@ -5,6 +5,11 @@ and is emptied when the session ends, so `glean --last` works without leaving
 a copy of your screen on disk overnight.  A durable history is off unless you
 switch it on, because a tool that quietly archives every region you OCR is a
 liability on a machine that handles anything sensitive.
+
+The state file is the other kind of memory: numbers only — the region last
+selected and the size the result window last had — so the next run can offer
+them back.  It holds no text and no image, and `remember = off` in the
+config stops it being written or read.
 """
 
 import json
@@ -23,10 +28,46 @@ def runtime_dir():
     return path
 
 
-def data_dir():
+def base_dir():
     base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    path = os.path.join(base, APP, "history")
+    path = os.path.join(base, APP)
     os.makedirs(path, mode=0o700, exist_ok=True)
+    return path
+
+
+def data_dir():
+    path = os.path.join(base_dir(), "history")
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    return path
+
+
+def state_path():
+    return os.path.join(base_dir(), "state.json")
+
+
+def load_state():
+    """The remembered numbers, as a dict. {} if there are none."""
+    try:
+        with open(state_path()) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_state(**values):
+    """Merge values into the state file. Returns its path, or None."""
+    state = load_state()
+    state.update(values)
+    path = state_path()
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(state, fh)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError:
+        return None
     return path
 
 

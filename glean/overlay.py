@@ -20,12 +20,18 @@ LOUPE_ZOOM = 8
 ACCENT = (0.45, 0.78, 1.0)
 
 HINT = "drag to select   ·   click a window   ·   Esc to cancel"
+PENDING_HINT = "↵ the last selection   ·   drag to change it   ·   Esc to cancel"
 
 
 class Overlay(Gtk.Window):
-    """Runs its own main loop. `.rect` is the selection, or None if cancelled."""
+    """Runs its own main loop. `.rect` is the selection, or None if cancelled.
 
-    def __init__(self, pixbuf, hint=HINT):
+    `preselect` is a region in compositor-global coordinates from a previous
+    run: it is drawn as if already selected, and Enter or a click inside it
+    confirms it. Any drag replaces it, as ever.
+    """
+
+    def __init__(self, pixbuf, hint=HINT, preselect=None):
         wayland = capture.is_wayland()
         super().__init__(type=Gtk.WindowType.TOPLEVEL if wayland
                          else Gtk.WindowType.POPUP)
@@ -35,6 +41,8 @@ class Overlay(Gtk.Window):
         self._anchor = None
         self._cursor = (0, 0)
         self._inside = False
+        self._preselect = tuple(preselect) if preselect else None
+        self._pending = None
 
         if wayland:
             # GDK's root window has no size on Wayland; the monitors do. The
@@ -42,7 +50,7 @@ class Overlay(Gtk.Window):
             # the view is cropped to it, while selections are still reported
             # in global coordinates for crop() against the full capture.
             self._full = pixbuf
-            self._vx, self._vy, self._vw, self._vh = _virtual_bounds(
+            self._vx, self._vy, self._vw, self._vh = virtual_bounds(
                 self.get_display())
             self._landed = None
             self._set_view(self.get_display().get_primary_monitor()
@@ -58,6 +66,7 @@ class Overlay(Gtk.Window):
             self._sy = pixbuf.get_height() / float(self._h or 1)
             self._view = pixbuf
             self.pixbuf = pixbuf
+            self._pending = self._local_pending()
 
         self.set_app_paintable(True)
         self.set_decorated(False)
@@ -123,6 +132,23 @@ class Overlay(Gtk.Window):
                        self._full.get_height() - y))
         self._view = self._full.new_subpixbuf(x, y, w, h)
         self.pixbuf = self._view
+        self._pending = self._local_pending()
+
+    def _local_pending(self):
+        """The remembered region in this view's coordinates, or None if the
+        region is not on the monitor the overlay landed on."""
+        if self._preselect is None:
+            return None
+        local = to_local(self._preselect, self._ox, self._oy, self._sx, self._sy)
+        return clamp(local, self._w, self._h)
+
+    def _confirm_preselect(self):
+        """Hand back the remembered region, trimmed to this monitor."""
+        rect = intersect(self._preselect,
+                         (self._ox, self._oy, self._w, self._h))
+        if rect is None:
+            return          # it is not on the monitor we landed on after all
+        self._finish(clamp(rect, self._vw, self._vh))
 
     def choose(self):
         """Show, block until the user picks or cancels, return a rect or None."""
@@ -176,6 +202,11 @@ class Overlay(Gtk.Window):
         rect = normalise(self._anchor, (event.x, event.y))
         self._anchor = None
         if rect[2] < MIN_DRAG or rect[3] < MIN_DRAG:
+            if self._pending is not None and _contains(self._pending, event.x,
+                                                       event.y):
+                # A click inside the remembered box means "that one again".
+                self._confirm_preselect()
+                return True
             rect = window_at(int(event.x_root), int(event.y_root),
                              exclude=self.get_window())
             if rect is None:
@@ -193,6 +224,9 @@ class Overlay(Gtk.Window):
         if name in ("Escape", "q", "Q"):
             self._finish(None)
         elif name in ("Return", "KP_Enter", "space"):
+            if self._pending is not None:
+                self._confirm_preselect()
+                return True
             rect = window_at(int(self._cursor[0]), int(self._cursor[1]),
                              exclude=self.get_window())
             if rect:
@@ -217,6 +251,8 @@ class Overlay(Gtk.Window):
         rect = None
         if self._anchor is not None:
             rect = normalise(self._anchor, self._cursor)
+        elif self._pending is not None:
+            rect = self._pending
 
         if rect and rect[2] >= 1 and rect[3] >= 1:
             self._draw_selection(cr, rect)
@@ -297,6 +333,7 @@ class Overlay(Gtk.Window):
         cr.stroke()
 
     def _draw_hint(self, cr):
+        hint = self.hint if self._pending is None else PENDING_HINT
         display = self.get_display()
         monitor = display.get_monitor_at_point(int(self._cursor[0] + self._ox),
                                                int(self._cursor[1] + self._oy)) \
@@ -304,7 +341,7 @@ class Overlay(Gtk.Window):
         area = monitor.get_geometry()
         cr.select_font_face("sans-serif")
         cr.set_font_size(14)
-        extents = cr.text_extents(self.hint)
+        extents = cr.text_extents(hint)
         pad = 14
         bw, bh = extents.width + pad * 2, 34
         bx = (area.x - self._ox) + (area.width - bw) / 2
@@ -314,17 +351,17 @@ class Overlay(Gtk.Window):
         cr.fill()
         cr.set_source_rgba(1, 1, 1, 0.92)
         cr.move_to(bx + pad, by + bh - 12)
-        cr.show_text(self.hint)
+        cr.show_text(hint)
 
 
-def _virtual_bounds(display):
+def virtual_bounds(display):
     """(x, y, w, h) bounding box of every monitor, in compositor coordinates."""
     x0 = y0 = x1 = y1 = 0
     for i in range(display.get_n_monitors()):
         g = display.get_monitor(i).get_geometry()
         x0, y0 = min(x0, g.x), min(y0, g.y)
         x1, y1 = max(x1, g.x + g.width), max(y1, g.y + g.height)
-    return x0, y0, x1 - x0, y1 - y0
+    return x0, y0, x1 - x0, y1 - x0
 
 
 def _rounded(cr, x, y, w, h, r):
@@ -342,6 +379,31 @@ def normalise(start, end):
     x1, y1 = end
     x, y = int(min(x0, x1)), int(min(y0, y1))
     return (x, y, int(abs(x1 - x0)), int(abs(y1 - y0)))
+
+
+def intersect(a, b):
+    """The overlap of two rects, or None if they do not overlap."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    x0, y0 = max(ax, bx), max(ay, by)
+    x1, y1 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
+def to_local(rect, ox, oy, sx, sy):
+    """A rect in compositor-global logical coordinates -> the overlay's view,
+    which is one monitor's pixels, offset by (ox, oy) and scaled by (sx, sy)."""
+    x, y, w, h = rect
+    return (int((x - ox) * sx), int((y - oy) * sy),
+            max(1, int(w * sx)), max(1, int(h * sy)))
+
+
+def _contains(rect, x, y):
+    """Is a point inside a rect?"""
+    rx, ry, rw, rh = rect
+    return rx <= x < rx + rw and ry <= y < ry + rh
 
 
 def clamp(rect, width, height):
@@ -377,11 +439,15 @@ def window_at(x, y, exclude=None):
     return None
 
 
-def select(pixbuf=None, hint=HINT):
-    """Freeze the screen, let the user pick. Returns (pixbuf, rect) or (None, None)."""
+def select(pixbuf=None, hint=HINT, preselect=None):
+    """Freeze the screen, let the user pick. Returns (pixbuf, rect) or (None, None).
+
+    `preselect` (a rect in compositor-global coordinates) is offered back to
+    the user as the current selection; see Overlay.
+    """
     if pixbuf is None:
         pixbuf = capture.screen()
-    overlay = Overlay(pixbuf, hint)
+    overlay = Overlay(pixbuf, hint, preselect)
     rect = overlay.choose()
     overlay.destroy()
     if rect is None:
@@ -393,7 +459,7 @@ def crop(pixbuf, rect, screen_w=None, screen_h=None):
     """Cut `rect` (in compositor-global coordinates) out of a full-screen pixbuf."""
     x, y, w, h = rect
     if not screen_w or not screen_h:
-        _bx, _by, bw, bh = _virtual_bounds(Gdk.Display.get_default())
+        _bx, _by, bw, bh = virtual_bounds(Gdk.Display.get_default())
         screen_w = screen_w or bw
         screen_h = screen_h or bh
     sx = pixbuf.get_width() / float(screen_w or 1)

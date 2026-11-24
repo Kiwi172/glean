@@ -85,8 +85,14 @@ Run `glean`, drag a box, and the text is on your clipboard.
 |---|---|
 | drag | select that region |
 | click | select the window under the pointer |
+| `↵`, `space` | the region you picked last time — it is drawn there already, and a click inside it says yes too |
 | `a` | the whole screen |
 | `Esc`, right-click | cancel |
+
+The remembered box is only offered when your screens are laid out exactly as
+they were when you drew it; otherwise the overlay behaves as if it had never
+seen anything. `glean --fresh` ignores the memory for one run, and
+`remember = off` in the config turns it off for good.
 
 A window then opens with the text in it, already copied, next to the image it
 came from. OCR gets things wrong — a `/` becomes an `f`, a `(` becomes a `{` —
@@ -102,6 +108,9 @@ whether to glue together lines that a narrow column happened to break.
 | `Ctrl+R` | read it again with the current settings |
 | `Esc` | close |
 
+The window reopens the way you left it — same size, same split between the
+picture and the text — trimmed to fit whatever screen you are on now.
+
 ### From a script
 
 ```bash
@@ -111,6 +120,7 @@ glean --full --raw                 # the whole screen
 glean --file screenshot.png --raw  # an image you already have
 glean --delay 3                    # time to open a menu first
 glean --last                       # the previous capture, without re-grabbing
+glean --fresh                      # ignore the remembered region this time
 ```
 
 `--raw` exits 0 when it read something and 1 when it did not, so
@@ -180,6 +190,11 @@ handles anything sensitive, so the durable history is off. Switch it on with
 `--keep`, or `history = on` in the config, and captures go to
 `~/.local/share/glean/history`, mode 0600, oldest pruned past 200.
 
+The one exception is a memory of *numbers*: `~/.local/share/glean/state.json`
+(mode 0600) holds the coordinates of the region you last selected and the size
+the result window last had, so the next run can put them back. No text, no
+images. `remember = off` in the config stops it being written or read.
+
 ---
 
 ## Limitations
@@ -211,7 +226,7 @@ segmentation mode — change it and press `Ctrl+R`.
 python3 -m unittest discover -s tests -t .
 ```
 
-41 tests, no display needed. The OCR ones render text with cairo and read it
+49 tests, no display needed. The OCR ones render text with cairo and read it
 back, so they check the real pipeline rather than a mock of it; they skip
 themselves if tesseract is not installed.
 

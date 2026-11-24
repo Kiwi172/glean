@@ -33,6 +33,8 @@ def build_parser(defaults):
                       help="an image file instead of the screen")
     what.add_argument("--last", action="store_true",
                       help="the previous capture, from this session")
+    what.add_argument("--fresh", action="store_true",
+                      help="ignore the remembered region this time")
     what.add_argument("-d", "--delay", type=float, default=0, metavar="SEC",
                       help="wait before grabbing, to open a menu first")
 
@@ -88,6 +90,9 @@ def main(argv=None):
         return write_config()
     if args.command == "hotkey":
         return manage_hotkey(args)
+    args.remember = _flag(defaults["remember"])
+    if not args.remember:
+        args.fresh = True
     return grab(args)
 
 
@@ -154,7 +159,8 @@ def grab(args):
         from glean import ui
         final = ui.show(pixbuf, result, {"lang": args.lang, "psm": args.psm,
                                          "preprocess": args.pre,
-                                         "unwrap": args.unwrap})
+                                         "unwrap": args.unwrap,
+                                         "remember": args.remember})
         if not args.no_copy and final.strip():
             clip.copy(final)
 
@@ -177,10 +183,40 @@ def source_image(args, capture, overlay, store, GdkPixbuf):
         return capture.screen(args.backend), "screen"
 
     screen = capture.screen(args.backend)
-    screen, rect = overlay.select(screen)
+    preselect = None if args.fresh else _remembered_rect(store, overlay)
+    screen, rect = overlay.select(screen, preselect=preselect)
     if rect is None:
         return None, "cancelled"
+    if args.remember:
+        store.save_state(last_rect=list(rect),
+                         last_virtual=list(overlay.virtual_bounds(
+                             _gdk_display())))
     return overlay.crop(screen, rect), "region"
+
+
+def _gdk_display():
+    from glean.gi3 import Gdk
+    return Gdk.Display.get_default()
+
+
+def _remembered_rect(store, overlay):
+    """The region picked last time, or None if the screens have moved since.
+
+    A remembered rect only means something on a layout that still matches the
+    one it was drawn on; anything else falls back to a plain selection.
+    """
+    state = store.load_state()
+    rect, virtual = state.get("last_rect"), state.get("last_virtual")
+    if not isinstance(rect, list) or len(rect) != 4:
+        return None
+    try:
+        rect = tuple(int(v) for v in rect)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(virtual, list) or \
+            list(virtual) != list(overlay.virtual_bounds(_gdk_display())):
+        return None
+    return rect
 
 
 def _preview(text, limit=180):
@@ -264,6 +300,7 @@ def doctor():
                                       "" if os.path.exists(config.path())
                                       else "  (not written; run: glean config)"))
     print("  last capture    %s" % store.runtime_dir())
+    print("  remembered      %s" % store.state_path())
     return 0 if working and ocr.have_tesseract() else 1
 
 

@@ -8,6 +8,7 @@ DEFAULTS = {
     "psm": "auto",
     "preprocess": "auto",
     "history": "off",
+    "remember": "on",
     "unwrap": "off",
     "backend": "",
     "hotkey": "<Super><Shift>t",
